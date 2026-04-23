@@ -1,0 +1,16 @@
+numpy
+pandas
+scipy
+torch
+scikit-learn
+mlflow
+joblib
+fastapi
+uvicorn
+streamlit
+requests
+python-multipart
+matplotlib
+seaborn
+shap
+pyarrow
