@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
+from typing import List
 import torch
 import joblib
 import numpy as np
@@ -64,6 +65,38 @@ def predict(params: BeamParams):
         "max_stress_Pa": float(preds[1]),
         "natural_freq_Hz": float(preds[2]),
         "inference_time_ms": float(infer_time)
+    }
+
+@app.post("/predict_batch")
+def predict_batch(batch_params: List[BeamParams]):
+    start_t = time.time()
+    
+    # 1. Structure inputs
+    input_list = [[p.L, p.b, p.h, p.F, p.E, p.rho] for p in batch_params]
+    input_arr = np.array(input_list)
+    
+    # 2. Scale inputs
+    x_scaled = X_scaler.transform(input_arr)
+    x_tensor = torch.tensor(x_scaled, dtype=torch.float32)
+    
+    # 3. Predict
+    with torch.no_grad():
+        preds_scaled = model(x_tensor)
+        
+    # 4. Inverse transform
+    preds = y_scaler.inverse_transform(preds_scaled.numpy())
+    
+    infer_time = (time.time() - start_t) * 1000 # ms
+    
+    return {
+        "predictions": [
+            {
+                "max_deflection_m": float(p[0]),
+                "max_stress_Pa": float(p[1]),
+                "natural_freq_Hz": float(p[2])
+            } for p in preds
+        ],
+        "total_inference_time_ms": float(infer_time)
     }
 
 @app.get("/health")

@@ -99,16 +99,13 @@ with tab1:
                 progress_bar.progress((i / 2) / N_BENCH)
         total_analytical = (time.perf_counter() - start_analytical) * 1000
         
-        # Benchmark AI (sequential for fair comparison of overhead, or batch if API supported)
+        # Benchmark AI (using Batch mode for extreme speed)
         start_ai = time.perf_counter()
-        api_url = "http://localhost:8000/predict"
+        batch_url = "http://localhost:8000/predict_batch"
         if os.environ.get('IN_DOCKER'):
-            api_url = "http://api:8000/predict"
+            batch_url = "http://api:8000/predict_batch"
             
-        for i, cfg in enumerate(random_configs):
-            requests.post(api_url, json=cfg)
-            if i % 100 == 0:
-                progress_bar.progress(0.5 + (i / 2) / N_BENCH)
+        requests.post(batch_url, json=random_configs)
         total_ai = (time.perf_counter() - start_ai) * 1000
         
         progress_bar.progress(1.0)
