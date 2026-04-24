@@ -5,6 +5,7 @@ import numpy as np
 from beam_physics import calculate_beam_properties
 import time
 import os
+import matplotlib.pyplot as plt
 
 st.set_page_config(layout="wide", page_title="AI Structural Simulator")
 
@@ -16,9 +17,13 @@ st.sidebar.header("Beam Configuration")
 
 # Material Presets
 materials = {
-    "Steel": {"E": 200e9, "rho": 7850},
-    "Aluminum": {"E": 69e9, "rho": 2700},
-    "HDPE": {"E": 1e9, "rho": 970}
+    "Steel": {"E": 200e9, "rho": 7850, "yield": 250e6},
+    "Aluminum": {"E": 69e9, "rho": 2700, "yield": 95e6},
+    "HDPE": {"E": 1e9, "rho": 970, "yield": 20e6},
+    "Titanium": {"E": 114e9, "rho": 4500, "yield": 880e6},
+    "Concrete": {"E": 30e9, "rho": 2400, "yield": 5e6}, # low tension yield
+    "Wood (Oak)": {"E": 11e9, "rho": 700, "yield": 40e6},
+    "Carbon Fiber": {"E": 150e9, "rho": 1600, "yield": 1200e6}
 }
 mat_select = st.sidebar.selectbox("Material", list(materials.keys()))
 
@@ -27,21 +32,57 @@ b = st.sidebar.slider("Width (b) [m]", 0.01, 0.2, 0.05, 0.01)
 h = st.sidebar.slider("Height (h) [m]", 0.01, 0.2, 0.1, 0.01)
 F = st.sidebar.slider("Load (F) [N]", 100, 50000, 1000, 100)
 
+st.sidebar.markdown("---")
+st.sidebar.header("Visualization Settings")
+vis_scale = st.sidebar.slider("Visual Bending Scale", 1, 1000, 100)
+
 E = materials[mat_select]["E"]
 rho = materials[mat_select]["rho"]
+yield_str = materials[mat_select]["yield"]
 
 tab1, tab2 = st.tabs(["🚀 Live Simulator", "📊 Model Performance"])
 
-with tab1:
-    col1, col2 = st.columns(2)
+def draw_beam(L, deflection_m, scale):
+    # Create points along the beam
+    x = np.linspace(0, L, 100)
+    
+    # Cap the visualization deflection to avoid massive image sizes
+    # We use a tanh-like scaling or just a simple cap to keep it within bounds
+    vis_deflection = deflection_m * scale
+    if abs(vis_deflection) > 1.0:
+        vis_deflection = np.sign(vis_deflection) * 1.0 # Cap at 1.0m visually
+    
+    y = - vis_deflection * (x/L)**3 
+    
+    fig, ax = plt.subplots(figsize=(8, 3))
+    # Draw beam
+    ax.plot(x, y, lw=8, color='#3498db', alpha=0.9, solid_capstyle='round', label='Deformed Beam')
+    # Draw original position (dotted)
+    ax.plot([0, L], [0, 0], 'k--', alpha=0.2, label='Original Position')
+    # Support (fixed end)
+    ax.plot([0, 0], [-1.2, 1.2], '#2c3e50', lw=6)
+    # Load arrow
+    if abs(vis_deflection) > 0.001:
+        ax.annotate('', xy=(L, y[-1]), xytext=(L, y[-1] + 0.3 if vis_deflection < 0 else y[-1] - 0.3),
+                    arrowprops=dict(facecolor='#e74c3c', shrink=0.05, width=2))
+        ax.text(L, y[-1] + 0.4 if vis_deflection < 0 else y[-1] - 0.4, f"{F} N", color='#e74c3c', ha='center', weight='bold')
+    
+    ax.set_ylim(-1.5, 1.5)
+    ax.set_xlim(-0.2, L + 0.2)
+    # Remove aspect equal to prevent massive width/height issues
+    ax.axis('off')
+    ax.set_title(f"Visualized Bending Behavior", fontsize=10, pad=10)
+    plt.tight_layout()
+    return fig
 
+with tab1:
+    col1, col2 = st.columns([1, 1])
+
+    data = None
     with col1:
         st.header("DNN Surrogate Prediction")
         
-        # Payload for FastAPI
-        payload = {
-            "L": L, "b": b, "h": h, "F": F, "E": E, "rho": rho
-        }
+        payload = {"L": L, "b": b, "h": h, "F": F, "E": E, "rho": rho}
         
         try:
             api_url = "http://localhost:8000/predict"
@@ -63,7 +104,6 @@ with tab1:
 
     with col2:
         st.header("Analytical Ground Truth")
-        
         start_t = time.perf_counter()
         v, s, f = calculate_beam_properties(L, b, h, F, E, rho)
         calc_time = (time.perf_counter() - start_t) * 1000
@@ -72,6 +112,47 @@ with tab1:
         st.metric("Max Stress", f"{s/1e6:.2f} MPa")
         st.metric("Natural Frequency", f"{f:.2f} Hz")
         st.info(f"🐌 Compute Time: {calc_time:.2f} ms")
+
+    st.markdown("---")
+    
+    # 3D/Visual Section
+    v_col1, v_col2 = st.columns([2, 1])
+    
+    with v_col1:
+        st.subheader("Visual Bending Behavior")
+        if data:
+            fig = draw_beam(L, data['max_deflection_m'], vis_scale)
+            st.pyplot(fig)
+        else:
+            st.info("Waiting for data to visualize...")
+
+    with v_col2:
+        st.subheader("📜 Simplified Engineer's Report")
+        if data:
+            stress_ratio = data['max_stress_Pa'] / yield_str
+            
+            if stress_ratio > 1.0:
+                st.error("❌ **DANGER: Structural Failure!**")
+                st.markdown(f"The predicted stress is **{stress_ratio:.1f}x** higher than the material can handle. The beam will likely break.")
+            elif stress_ratio > 0.7:
+                st.warning("⚠️ **CAUTION: High Stress**")
+                st.markdown("The beam is nearing its limit. Consider increasing the Height (h) or using a stronger material like Steel or Titanium.")
+            else:
+                st.success("✅ **SAFE: Structure is Stable**")
+                st.markdown(f"The material is operating at only **{stress_ratio*100:.1f}%** of its capacity.")
+
+            # Stiffness Check
+            deflection_mm = data['max_deflection_m'] * 1000
+            if deflection_mm < 1.0:
+                st.info("💎 **Stiffness: Very Rigid**")
+            elif deflection_mm < 10.0:
+                st.info("📏 **Stiffness: Moderate Flex**")
+            else:
+                st.info("🧪 **Stiffness: Highly Flexible**")
+                
+            st.markdown(f"**Natural Frequency Check:** At **{data['natural_freq_Hz']:.1f} Hz**, this beam is {'highly stable' if data['natural_freq_Hz'] > 50 else 'prone to vibration'}.")
+        else:
+            st.info("Simulation report will appear here once results are ready.")
 
     st.markdown("---")
     if st.button("Generate Random Configurations and Benchmark Speedup"):
